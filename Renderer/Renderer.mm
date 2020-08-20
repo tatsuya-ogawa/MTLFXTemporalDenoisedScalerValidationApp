@@ -453,7 +453,7 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
 
         // Mark the instance as opaque if it doesn't have an intersection function so that the
         // ray intersector doesn't attempt to execute a function that doesn't exist.
-        instanceDescriptors[instanceIndex].flags = instance.geometry.intersectionFunctionName == nil ? MTLAccelerationStructureInstanceFlagOpaque : 0;
+        instanceDescriptors[instanceIndex].options = instance.geometry.intersectionFunctionName == nil ? MTLAccelerationStructureInstanceOptionOpaque : 0;
 
         // Metal adds the geometry intersection function table offset and instance intersection
         // function table offset together to determine which intersection function to execute.

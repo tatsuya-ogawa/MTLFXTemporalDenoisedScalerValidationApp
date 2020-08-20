@@ -10,6 +10,6 @@ Implement ray-traced rendering using GPU-based parallel processing.
 
 This sample requires the following system and software configuration:
 
-* macOS 11.0 or later
+* macOS 11 or later
 * iOS 14 or later
 * Xcode 12 or later

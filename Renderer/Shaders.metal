@@ -52,18 +52,14 @@ float halton(unsigned int i, unsigned int d) {
 // given the barycentric coordinates and triangle index in an intersection structure.
 template<typename T>
 inline T interpolateVertexAttribute(device T *attributes, unsigned int primitiveIndex, float2 uv) {
-    // Barycentric coordinates sum to one.
-    float3 uvw;
-    uvw.xy = uv;
-    uvw.z = 1.0f - uvw.x - uvw.y;
-
     // Look up value for each vertex.
     T T0 = attributes[primitiveIndex * 3 + 0];
     T T1 = attributes[primitiveIndex * 3 + 1];
     T T2 = attributes[primitiveIndex * 3 + 2];
 
     // Compute sum of vertex attributes weighted by barycentric coordinates.
-    return uvw.x * T0 + uvw.y * T1 + uvw.z * T2;
+    // Barycentric coordinates sum to one.
+    return (1.0f - uv.x - uv.y) * T0 + uv.x * T1 + uv.y * T2;
 }
 
 // Uses the inversion method to map two uniformly random numbers to a three dimensional

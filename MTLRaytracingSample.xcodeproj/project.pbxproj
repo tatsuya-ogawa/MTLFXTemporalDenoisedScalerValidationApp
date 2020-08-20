@@ -27,6 +27,8 @@
 		51F70012209BCA010017E288 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 51F7FFF8209BC3C00017E288 /* Main.storyboard */; };
 		51F70013209BCA010017E288 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 51F7FFF6209BC3C00017E288 /* LaunchScreen.storyboard */; };
 		51F7001A209BCA180017E288 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 51F70006209BC3F00017E288 /* Main.storyboard */; };
+		51FA2C0F24EDCF0000C94F4E /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 51FA2C0E24EDCF0000C94F4E /* MetalKit.framework */; };
+		51FA2C1124EDCF0600C94F4E /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 51FA2C1024EDCF0600C94F4E /* MetalKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,6 +55,8 @@
 		51F7FFF1209BC3B70017E288 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		51F7FFF7209BC3C00017E288 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		51F7FFF9209BC3C00017E288 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+		51FA2C0E24EDCF0000C94F4E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS14.0.sdk/System/Library/Frameworks/MetalKit.framework; sourceTree = DEVELOPER_DIR; };
+		51FA2C1024EDCF0600C94F4E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		75C9F6B67D816F9E6846C8F2 /* LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; path = LICENSE.txt; sourceTree = "<group>"; };
 		BD7DA167F880B4426C98EC4C /* SampleCode.xcconfig */ = {isa = PBXFileReference; name = SampleCode.xcconfig; path = Configuration/SampleCode.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -62,6 +66,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				51FA2C0F24EDCF0000C94F4E /* MetalKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -69,6 +74,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				51FA2C1124EDCF0600C94F4E /* MetalKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -139,6 +145,8 @@
 		51E97FA42017014100D09D13 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				51FA2C0E24EDCF0000C94F4E /* MetalKit.framework */,
+				51FA2C1024EDCF0600C94F4E /* MetalKit.framework */,
 				51564714205B0E0B006AF627 /* Metal.framework */,
 			);
 			name = Frameworks;
@@ -439,6 +447,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MTL_LANGUAGE_REVISION = Metal23;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.MetalRaytracingSample${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -485,7 +494,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.16;
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MTL_LANGUAGE_REVISION = Metal23;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.MetalRaytracingSample${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -508,7 +518,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.16;
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MTL_LANGUAGE_REVISION = Metal23;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.MetalRaytracingSample${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
