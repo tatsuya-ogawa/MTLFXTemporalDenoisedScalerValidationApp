@@ -65,6 +65,12 @@ MTLResourceOptions getManagedBufferStorageMode();
 // Represents a piece of geometry made of triangles.
 @interface TriangleGeometry : Geometry
 
+@property (nonatomic, readonly) id <MTLBuffer> indexBuffer;
+@property (nonatomic, readonly) id <MTLBuffer> vertexPositionBuffer;
+@property (nonatomic, readonly) id <MTLBuffer> vertexNormalBuffer;
+@property (nonatomic, readonly) id <MTLBuffer> vertexColorBuffer;
+@property (nonatomic, readonly) NSUInteger indexCount;
+
 // Add a cube to the triangle geometry.
 - (void)addCubeWithFaces:(unsigned int)faceMask
                    color:(vector_float3)color
@@ -75,6 +81,9 @@ MTLResourceOptions getManagedBufferStorageMode();
 
 // Represents a piece of geometry made of spheres.
 @interface SphereGeometry : Geometry
+
+@property (nonatomic, readonly) id <MTLBuffer> sphereBuffer;
+@property (nonatomic, readonly) NSUInteger sphereCount;
 
 - (void)addSphereWithOrigin:(vector_float3)origin
                      radius:(float)radius

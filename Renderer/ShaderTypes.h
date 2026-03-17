@@ -52,7 +52,16 @@ struct Uniforms {
     unsigned int height;
     unsigned int frameIndex;
     unsigned int lightCount;
+    unsigned int temporalDenoiserEnabled;
+    vector_float2 jitter;
     Camera camera;
+    matrix_float4x4 worldToViewMatrix;
+    matrix_float4x4 viewToClipMatrix;
+    matrix_float4x4 previousWorldToViewMatrix;
+    matrix_float4x4 previousViewToClipMatrix;
+    float materialRoughness;
+    float materialSpecular;
+    unsigned int samplesPerPixel;
 };
 
 struct Sphere {

@@ -82,8 +82,8 @@
 		51FA2C1024EDCF0600C94F4E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		5236FED32F3FE41000437B09 /* WindowSceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WindowSceneDelegate.h; sourceTree = "<group>"; };
 		5236FED42F3FE41000437B09 /* WindowSceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WindowSceneDelegate.m; sourceTree = "<group>"; };
-		ECCD252A9D8DEF7E2FB2C6DD /* LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; path = LICENSE.txt; sourceTree = "<group>"; };
-		F5AACBC7FA7FF993C2B54D5F /* SampleCode.xcconfig */ = {isa = PBXFileReference; name = SampleCode.xcconfig; path = Configuration/SampleCode.xcconfig; sourceTree = "<group>"; };
+		ECCD252A9D8DEF7E2FB2C6DD /* LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; path = LICENSE.txt; sourceTree = "<group>"; };
+		F5AACBC7FA7FF993C2B54D5F /* SampleCode.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = SampleCode.xcconfig; path = Configuration/SampleCode.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -303,8 +303,6 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2620;
 				ORGANIZATIONNAME = Apple;
-				TargetAttributes = {
-				};
 			};
 			buildConfigurationList = 51E97F672016FC6600D09D13 /* Build configuration list for PBXProject "SimplePathTracer" */;
 			compatibilityVersion = "Xcode 9.3";
@@ -471,8 +469,12 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=1";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal3${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal3";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -498,8 +500,12 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=1";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal3${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal3";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -523,12 +529,16 @@
 					"SUPPORTS_METAL_3=1",
 				);
 				INFOPLIST_FILE = Application/iOS/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=1";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal3${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal3";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -551,12 +561,16 @@
 					"TARGET_IOS=1",
 				);
 				INFOPLIST_FILE = Application/iOS/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=1";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal3${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal3";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -699,13 +713,17 @@
 					"SUPPORTS_METAL_3=0",
 				);
 				INFOPLIST_FILE = Application/iOS/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MTL_LANGUAGE_REVISION = Metal23;
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=0";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal2${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal2";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -728,13 +746,17 @@
 					"TARGET_IOS=1",
 				);
 				INFOPLIST_FILE = Application/iOS/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MTL_LANGUAGE_REVISION = Metal23;
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=0";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal2${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal2";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -766,9 +788,13 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MTL_LANGUAGE_REVISION = Metal23;
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=0";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal2${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal2";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -794,9 +820,13 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MTL_LANGUAGE_REVISION = Metal23;
 				MTL_PREPROCESSOR_DEFINITIONS = "SUPPORTS_METAL_3=0";
+				OTHER_LDFLAGS = (
+					"-weak_framework",
+					MetalFX,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.example.apple-samplecode.SimplePathTracer-Metal2${SAMPLE_CODE_DISAMBIGUATOR}";
 				PRODUCT_NAME = "SimplePathTracer-Metal2";
 				PROVISIONING_PROFILE_SPECIFIER = "";

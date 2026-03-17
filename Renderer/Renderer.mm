@@ -7,6 +7,13 @@ The implementation of the renderer class that performs Metal setup and per-frame
 
 #import <simd/simd.h>
 
+#if __has_include(<MetalFX/MetalFX.h>)
+#import <MetalFX/MetalFX.h>
+#define SUPPORTS_METALFX_FRAMEWORK 1
+#else
+#define SUPPORTS_METALFX_FRAMEWORK 0
+#endif
+
 #import "Renderer.h"
 #import "Transforms.h"
 #import "ShaderTypes.h"
@@ -16,6 +23,54 @@ using namespace simd;
 
 static const NSUInteger maxFramesInFlight = 3;
 static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
+static const float fieldOfViewRadians = 45.0f * (M_PI / 180.0f);
+static const float nearPlane = 0.05f;
+static const float farPlane = 20.0f;
+
+static float haltonJitter(NSUInteger index, NSUInteger base)
+{
+    float fraction = 1.0f;
+    float result = 0.0f;
+
+    while (index > 0) {
+        fraction /= base;
+        result += fraction * (index % base);
+        index /= base;
+    }
+
+    return result;
+}
+
+static matrix_float4x4 worldToViewMatrix(vector_float3 position,
+                                         vector_float3 target,
+                                         vector_float3 up)
+{
+    vector_float3 forward = vector_normalize(target - position);
+    vector_float3 right = vector_normalize(vector_cross(forward, up));
+    vector_float3 correctedUp = vector_normalize(vector_cross(right, forward));
+
+    return (matrix_float4x4) {{
+        { right.x, correctedUp.x, forward.x, 0.0f },
+        { right.y, correctedUp.y, forward.y, 0.0f },
+        { right.z, correctedUp.z, forward.z, 0.0f },
+        { -vector_dot(right, position), -vector_dot(correctedUp, position), -vector_dot(forward, position), 1.0f }
+    }};
+}
+
+static matrix_float4x4 viewToClipMatrix(float aspectRatio)
+{
+    float yScale = -1.0f / tanf(fieldOfViewRadians * 0.5f);
+    float xScale = -yScale / aspectRatio; // Should be positive to match the raytracer's X axis
+    float zScale = farPlane / (farPlane - nearPlane);
+    float wzScale = (-nearPlane * farPlane) / (farPlane - nearPlane);
+
+    return (matrix_float4x4) {{
+        { xScale, 0.0f, 0.0f, 0.0f },
+        { 0.0f, yScale, 0.0f, 0.0f },
+        { 0.0f, 0.0f, zScale, 1.0f },
+        { 0.0f, 0.0f, wzScale, 0.0f }
+    }};
+}
 
 @implementation Renderer
 {
@@ -30,9 +85,34 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
 
     id <MTLComputePipelineState> _raytracingPipeline;
     id <MTLRenderPipelineState> _copyPipeline;
+    id <MTLRenderPipelineState> _copyForwardPipeline;
+    id <MTLRenderPipelineState> _copyDepthPipeline;
+    id <MTLRenderPipelineState> _copySpecularPipeline;
+    id <MTLRenderPipelineState> _copyRoughnessPipeline;
+    id <MTLRenderPipelineState> _copyMotionPipeline;
+    id <MTLRenderPipelineState> _copyNormalPipeline;
 
     id <MTLTexture> _accumulationTargets[2];
+    id <MTLTexture> _noisyColorTexture;
+    
+    id <MTLRenderPipelineState> _gBufferTrianglePipeline;
+    id <MTLRenderPipelineState> _gBufferSpherePipeline;
+    id <MTLDepthStencilState> _gBufferDepthState;
+    id <MTLTexture> _actualDepthTexture;
+    id <MTLTexture> _disabledDepthTexture;
+    id <MTLTexture> _motionTexture;
+    id <MTLTexture> _disabledMotionTexture;
+    id <MTLTexture> _diffuseAlbedoTexture;
+    id <MTLTexture> _specularAlbedoTexture;
+    id <MTLTexture> _normalTexture;
+    id <MTLTexture> _roughnessTexture;
+    id <MTLTexture> _exposureTexture;
+    id <MTLTexture> _metalFXOutputTexture;
     id <MTLTexture> _randomTexture;
+
+#if SUPPORTS_METALFX_FRAMEWORK
+    id <MTLFXTemporalDenoisedScaler> _temporalDenoisedScaler;
+#endif
 
     id <MTLBuffer> _resourceBuffer;
     id <MTLBuffer> _instanceBuffer;
@@ -45,12 +125,42 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
     NSUInteger _uniformBufferIndex;
 
     unsigned int _frameIndex;
+    bool _metalFXRequestedEnabled;
+    bool _metalFXEnabled;
+    RendererDenoiserMode _denoiserMode;
+    bool _metalFXUsesJitter;
+    bool _metalFXUsesDepthTexture;
+    bool _metalFXUsesMotionTexture;
+    bool _metalFXUsesMotionVectorScale;
+    bool _metalFXUsesWorldToViewMatrix;
+    bool _metalFXUsesViewToClipMatrix;
+    bool _metalFXAutoExposureEnabled;
+    float _metalFXManualExposure;
+    bool _needsResetHistory;
+    matrix_float4x4 _previousWorldToViewMatrix;
+    matrix_float4x4 _previousViewToClipMatrix;
+    bool _hdrEnabled;
 
     Scene *_scene;
 
     NSUInteger _resourcesStride;
     bool _useIntersectionFunctions;
     bool _usePerPrimitiveData;
+    NSUInteger _samplesPerPixel;
+}
+
+- (void)updateExposureTexture
+{
+    if (!_exposureTexture) {
+        return;
+    }
+
+    float clampedExposure = fmaxf(0.01f, _metalFXManualExposure);
+    __fp16 exposureValue = (__fp16)clampedExposure;
+    [_exposureTexture replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+                        mipmapLevel:0
+                          withBytes:&exposureValue
+                        bytesPerRow:sizeof(__fp16)];
 }
 
 - (nonnull instancetype)initWithDevice:(nonnull id<MTLDevice>)device
@@ -61,6 +171,24 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
     if (self)
     {
         _device = device;
+        _denoiserMode = RendererDenoiserModeDenoised;
+        _metalFXRequestedEnabled = true;
+        _metalFXEnabled = false;
+        _metalFXUsesJitter = true;
+        _metalFXUsesDepthTexture = true;
+        _metalFXUsesMotionTexture = true;
+        _metalFXUsesMotionVectorScale = true;
+        _metalFXUsesWorldToViewMatrix = true;
+        _metalFXUsesViewToClipMatrix = true;
+        _metalFXAutoExposureEnabled = false;
+        _metalFXManualExposure = 1.0f;
+        _roughness = 0.0f;
+        _specularAlbedo = 0.0f;
+        _needsResetHistory = true;
+        _previousWorldToViewMatrix = matrix_identity_float4x4;
+        _previousViewToClipMatrix = matrix_identity_float4x4;
+        _hdrEnabled = true;
+        _samplesPerPixel = 4;
 
         _sem = dispatch_semaphore_create(maxFramesInFlight);
 
@@ -206,7 +334,7 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
             [_intersectionFunctionTable setBuffer:_resourceBuffer offset:0 atIndex:0];
         }
 
-        // Map each piece of scene geometry to its intersection function.
+    // Map each piece of scene geometry to its intersection function.
         for (NSUInteger geometryIndex = 0; geometryIndex < _scene.geometries.count; geometryIndex++) {
             Geometry *geometry = _scene.geometries[geometryIndex];
 
@@ -225,6 +353,31 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
         }
     }
 
+    MTLDepthStencilDescriptor *depthDesc = [[MTLDepthStencilDescriptor alloc] init];
+    depthDesc.depthCompareFunction = MTLCompareFunctionLess;
+    depthDesc.depthWriteEnabled = YES;
+    _gBufferDepthState = [_device newDepthStencilStateWithDescriptor:depthDesc];
+
+    MTLRenderPipelineDescriptor *gBufferDesc = [[MTLRenderPipelineDescriptor alloc] init];
+    gBufferDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRG16Float;     // Motion
+    gBufferDesc.colorAttachments[1].pixelFormat = MTLPixelFormatRGBA16Float;   // Diffuse
+    gBufferDesc.colorAttachments[2].pixelFormat = MTLPixelFormatRGBA16Float;   // Specular
+    gBufferDesc.colorAttachments[3].pixelFormat = MTLPixelFormatRGBA16Float;   // Normal
+    gBufferDesc.colorAttachments[4].pixelFormat = MTLPixelFormatR16Float;      // Roughness
+    gBufferDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+
+    NSError *error;
+
+    gBufferDesc.vertexFunction = [_library newFunctionWithName:@"vertexGBufferTriangle"];
+    gBufferDesc.fragmentFunction = [_library newFunctionWithName:@"fragmentGBufferTriangle"];
+    _gBufferTrianglePipeline = [_device newRenderPipelineStateWithDescriptor:gBufferDesc error:&error];
+    NSAssert(_gBufferTrianglePipeline, @"Failed to create the G-Buffer Triangle pipeline state: %@", error);
+
+    gBufferDesc.vertexFunction = [_library newFunctionWithName:@"vertexGBufferSphere"];
+    gBufferDesc.fragmentFunction = [_library newFunctionWithName:@"fragmentGBufferSphere"];
+    _gBufferSpherePipeline = [_device newRenderPipelineStateWithDescriptor:gBufferDesc error:&error];
+    NSAssert(_gBufferSpherePipeline, @"Failed to create the G-Buffer Sphere pipeline state: %@", error);
+
     // Create a render pipeline state that copies the rendered scene into the MTKView and
     // performs simple tone mapping.
     MTLRenderPipelineDescriptor *renderDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
@@ -234,11 +387,32 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
 
     renderDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
 
-    NSError *error;
-
     _copyPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copyPipeline, @"Failed to create the copy pipeline state: %@", error);
 
-    NSAssert(_copyPipeline, @"Failed to create the copy pipeline state %@: %@", raytracingFunction.name, error);
+    renderDescriptor.fragmentFunction = [_library newFunctionWithName:@"copyForwardFragment"];
+    _copyForwardPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copyForwardPipeline, @"Failed to create the copy forward pipeline state: %@", error);
+
+    renderDescriptor.fragmentFunction = [_library newFunctionWithName:@"copyDepthFragment"];
+    _copyDepthPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copyDepthPipeline, @"Failed to create the copy depth pipeline state: %@", error);
+
+    renderDescriptor.fragmentFunction = [_library newFunctionWithName:@"copyNormalFragment"];
+    _copyNormalPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copyNormalPipeline, @"Failed to create the copy normal pipeline state: %@", error);
+
+    renderDescriptor.fragmentFunction = [_library newFunctionWithName:@"copySpecularFragment"];
+    _copySpecularPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copySpecularPipeline, @"Failed to create the copy specular pipeline state: %@", error);
+
+    renderDescriptor.fragmentFunction = [_library newFunctionWithName:@"copyRoughnessFragment"];
+    _copyRoughnessPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copyRoughnessPipeline, @"Failed to create the copy roughness pipeline state: %@", error);
+
+    renderDescriptor.fragmentFunction = [_library newFunctionWithName:@"copyMotionFragment"];
+    _copyMotionPipeline = [_device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
+    NSAssert(_copyMotionPipeline, @"Failed to create the copy motion pipeline state: %@", error);
 }
 
 // Create an argument encoder that encodes references to a set of resources into a buffer.
@@ -513,9 +687,186 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
     _instanceAccelerationStructure = [self newAccelerationStructureWithDescriptor:accelDescriptor];
 }
 
+- (BOOL)isMetalFXSupported
+{
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (@available(macOS 26.0, iOS 18.0, *)) {
+        return [MTLFXTemporalDenoisedScalerDescriptor supportsDevice:_device];
+    }
+#endif
+    return NO;
+}
+
+- (BOOL)isMetalFXEnabled
+{
+    return _metalFXEnabled;
+}
+
+- (RendererDenoiserMode)denoiserMode
+{
+    return _denoiserMode;
+}
+
+- (BOOL)isMetalFXAutoExposureEnabled
+{
+    return _metalFXAutoExposureEnabled;
+}
+
+- (float)metalFXManualExposure
+{
+    return _metalFXManualExposure;
+}
+
+- (void)setMetalFXManualExposure:(float)metalFXManualExposure
+{
+    _metalFXManualExposure = metalFXManualExposure;
+    [self updateExposureTexture];
+    _needsResetHistory = true;
+}
+
+- (void)setDenoiserMode:(RendererDenoiserMode)mode forView:(MTKView *)view
+{
+    _denoiserMode = mode;
+    _metalFXRequestedEnabled = (mode != RendererDenoiserModeRaw);
+    _needsResetHistory = true;
+
+    if (!CGSizeEqualToSize(_size, CGSizeZero)) {
+        [self mtkView:view drawableSizeWillChange:_size];
+    }
+}
+
+- (void)setMetalFXAutoExposureEnabled:(BOOL)enabled forView:(MTKView *)view
+{
+    _metalFXAutoExposureEnabled = enabled;
+    _needsResetHistory = true;
+
+    if (!CGSizeEqualToSize(_size, CGSizeZero)) {
+        [self mtkView:view drawableSizeWillChange:_size];
+    }
+}
+
+- (BOOL)isMetalFXOptionalParameterEnabled:(RendererMetalFXOptionalParameter)parameter
+{
+    switch (parameter) {
+        case RendererMetalFXOptionalParameterJitter:
+            return _metalFXUsesJitter;
+        case RendererMetalFXOptionalParameterDepthTexture:
+            return _metalFXUsesDepthTexture;
+        case RendererMetalFXOptionalParameterMotionTexture:
+            return _metalFXUsesMotionTexture;
+        case RendererMetalFXOptionalParameterMotionVectorScale:
+            return _metalFXUsesMotionVectorScale;
+        case RendererMetalFXOptionalParameterWorldToViewMatrix:
+            return _metalFXUsesWorldToViewMatrix;
+        case RendererMetalFXOptionalParameterViewToClipMatrix:
+            return _metalFXUsesViewToClipMatrix;
+    }
+
+    return NO;
+}
+
+- (void)setMetalFXOptionalParameter:(RendererMetalFXOptionalParameter)parameter
+                            enabled:(BOOL)enabled
+                            forView:(MTKView *)view
+{
+    switch (parameter) {
+        case RendererMetalFXOptionalParameterJitter:
+            _metalFXUsesJitter = enabled;
+            break;
+        case RendererMetalFXOptionalParameterDepthTexture:
+            _metalFXUsesDepthTexture = enabled;
+            break;
+        case RendererMetalFXOptionalParameterMotionTexture:
+            _metalFXUsesMotionTexture = enabled;
+            break;
+        case RendererMetalFXOptionalParameterMotionVectorScale:
+            _metalFXUsesMotionVectorScale = enabled;
+            break;
+        case RendererMetalFXOptionalParameterWorldToViewMatrix:
+            _metalFXUsesWorldToViewMatrix = enabled;
+            break;
+        case RendererMetalFXOptionalParameterViewToClipMatrix:
+            _metalFXUsesViewToClipMatrix = enabled;
+            break;
+    }
+
+    _needsResetHistory = true;
+}
+
+- (NSUInteger)samplesPerPixel {
+    return _samplesPerPixel;
+}
+
+- (void)setSamplesPerPixel:(NSUInteger)samplesPerPixel {
+    if (_samplesPerPixel != samplesPerPixel) {
+        _samplesPerPixel = samplesPerPixel;
+        _frameIndex = 0;
+    }
+}
+
+- (void)configureMetalFXForSize:(CGSize)size
+{
+#if SUPPORTS_METALFX_FRAMEWORK
+    _temporalDenoisedScaler = nil;
+    _metalFXEnabled = false;
+
+    if (size.width < 1.0 || size.height < 1.0) {
+        return;
+    }
+
+    if (_metalFXRequestedEnabled) {
+        if (@available(macOS 26.0, iOS 18.0, *)) {
+            if (![MTLFXTemporalDenoisedScalerDescriptor supportsDevice:_device]) {
+                return;
+            }
+
+            MTLPixelFormat format = _hdrEnabled ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm_sRGB;
+
+            MTLFXTemporalDenoisedScalerDescriptor *descriptor = [[MTLFXTemporalDenoisedScalerDescriptor alloc] init];
+            descriptor.colorTextureFormat = format;
+            descriptor.depthTextureFormat = MTLPixelFormatDepth32Float;
+            descriptor.motionTextureFormat = MTLPixelFormatRG16Float;
+            descriptor.diffuseAlbedoTextureFormat = MTLPixelFormatRGBA16Float;
+            descriptor.specularAlbedoTextureFormat = MTLPixelFormatRGBA16Float;
+            descriptor.normalTextureFormat = MTLPixelFormatRGBA16Float;
+            descriptor.roughnessTextureFormat = MTLPixelFormatR16Float;
+            descriptor.outputTextureFormat = format;
+            descriptor.inputWidth = (NSUInteger)size.width;
+            descriptor.inputHeight = (NSUInteger)size.height;
+            descriptor.outputWidth = (NSUInteger)size.width;
+            descriptor.outputHeight = (NSUInteger)size.height;
+            descriptor.autoExposureEnabled = _metalFXAutoExposureEnabled;
+
+            _temporalDenoisedScaler = [descriptor newTemporalDenoisedScalerWithDevice:_device];
+            _metalFXEnabled = _temporalDenoisedScaler != nil;
+        }
+    }
+#endif
+}
+
+- (BOOL)isHdrEnabled {
+    return _hdrEnabled;
+}
+
+- (void)setHdrEnabled:(BOOL)enabled forView:(MTKView *)view {
+    if (_hdrEnabled != enabled) {
+        _hdrEnabled = enabled;
+        _needsResetHistory = true;
+
+        if (!CGSizeEqualToSize(_size, CGSizeZero)) {
+            [self mtkView:view drawableSizeWillChange:_size];
+        }
+    }
+}
+
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size
 {
     _size = size;
+    _needsResetHistory = true;
+    _previousWorldToViewMatrix = matrix_identity_float4x4;
+    _previousViewToClipMatrix = matrix_identity_float4x4;
+
+    [self configureMetalFXForSize:size];
 
     // Create a pair of textures that the ray tracing kernel uses to accumulate
     // samples over several frames.
@@ -532,6 +883,140 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
 
     for (NSUInteger i = 0; i < 2; i++)
         _accumulationTargets[i] = [_device newTextureWithDescriptor:textureDescriptor];
+
+    textureDescriptor.pixelFormat = _hdrEnabled ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm_sRGB;
+    textureDescriptor.usage = MTLTextureUsageShaderWrite;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.colorTextureUsage;
+    }
+#endif
+    _noisyColorTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    MTLTextureDescriptor *actualDepthDescriptor = [[MTLTextureDescriptor alloc] init];
+    actualDepthDescriptor.pixelFormat = MTLPixelFormatDepth32Float;
+    actualDepthDescriptor.textureType = MTLTextureType2D;
+    actualDepthDescriptor.width = size.width;
+    actualDepthDescriptor.height = size.height;
+    actualDepthDescriptor.storageMode = MTLStorageModePrivate;
+    // ShaderRead needed so copyDepthFragment can sample this texture in debug mode
+    actualDepthDescriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        actualDepthDescriptor.usage |= _temporalDenoisedScaler.depthTextureUsage;
+    }
+#endif
+    _actualDepthTexture = [_device newTextureWithDescriptor:actualDepthDescriptor];
+
+    MTLTextureDescriptor *disabledDepthDescriptor = [actualDepthDescriptor copy];
+    _disabledDepthTexture = [_device newTextureWithDescriptor:disabledDepthDescriptor];
+
+    id<MTLCommandBuffer> clearDepthCommandBuffer = [_queue commandBuffer];
+    clearDepthCommandBuffer.label = @"Initialize Disabled Depth Texture";
+    MTLRenderPassDescriptor *disabledDepthPass = [MTLRenderPassDescriptor renderPassDescriptor];
+    disabledDepthPass.depthAttachment.texture = _disabledDepthTexture;
+    disabledDepthPass.depthAttachment.loadAction = MTLLoadActionClear;
+    disabledDepthPass.depthAttachment.storeAction = MTLStoreActionStore;
+    disabledDepthPass.depthAttachment.clearDepth = 1.0;
+    id<MTLRenderCommandEncoder> disabledDepthEncoder =
+        [clearDepthCommandBuffer renderCommandEncoderWithDescriptor:disabledDepthPass];
+    [disabledDepthEncoder endEncoding];
+    [clearDepthCommandBuffer commit];
+    [clearDepthCommandBuffer waitUntilCompleted];
+
+    textureDescriptor.storageMode = MTLStorageModePrivate;
+
+    textureDescriptor.pixelFormat = MTLPixelFormatRG16Float;
+    // ShaderRead needed for debug visualization and potentially denoiser
+    textureDescriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.motionTextureUsage;
+    }
+#endif
+    _motionTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    textureDescriptor.usage = MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.motionTextureUsage;
+    }
+#endif
+#if !TARGET_OS_IPHONE
+    textureDescriptor.storageMode = MTLStorageModeManaged;
+#else
+    textureDescriptor.storageMode = MTLStorageModeShared;
+#endif
+    _disabledMotionTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    size_t zeroMotionBytesPerRow = sizeof(uint16_t) * 2 * size.width;
+    void *zeroMotionBytes = calloc(size.height, zeroMotionBytesPerRow);
+    [_disabledMotionTexture replaceRegion:MTLRegionMake2D(0, 0, size.width, size.height)
+                              mipmapLevel:0
+                                withBytes:zeroMotionBytes
+                              bytesPerRow:zeroMotionBytesPerRow];
+    free(zeroMotionBytes);
+
+    textureDescriptor.storageMode = MTLStorageModePrivate;
+
+    textureDescriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    textureDescriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.diffuseAlbedoTextureUsage;
+    }
+#endif
+    _diffuseAlbedoTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    textureDescriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    textureDescriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.specularAlbedoTextureUsage;
+    }
+#endif
+    _specularAlbedoTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    textureDescriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    textureDescriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.normalTextureUsage;
+    }
+#endif
+    _normalTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    textureDescriptor.pixelFormat = MTLPixelFormatR16Float;
+    textureDescriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.roughnessTextureUsage;
+    }
+#endif
+    _roughnessTexture = [_device newTextureWithDescriptor:textureDescriptor];
+
+    MTLTextureDescriptor *exposureDescriptor = [[MTLTextureDescriptor alloc] init];
+    exposureDescriptor.pixelFormat = MTLPixelFormatR16Float;
+    exposureDescriptor.textureType = MTLTextureType2D;
+    exposureDescriptor.width = 1;
+    exposureDescriptor.height = 1;
+    exposureDescriptor.usage = MTLTextureUsageShaderRead;
+#if !TARGET_OS_IPHONE
+    exposureDescriptor.storageMode = MTLStorageModeManaged;
+#else
+    exposureDescriptor.storageMode = MTLStorageModeShared;
+#endif
+    _exposureTexture = [_device newTextureWithDescriptor:exposureDescriptor];
+    [self updateExposureTexture];
+
+    textureDescriptor.pixelFormat = _hdrEnabled ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm_sRGB;
+    textureDescriptor.usage = MTLTextureUsageShaderRead;
+#if SUPPORTS_METALFX_FRAMEWORK
+    if (_metalFXEnabled) {
+        textureDescriptor.usage |= _temporalDenoisedScaler.outputTextureUsage;
+    }
+#endif
+    _metalFXOutputTexture = [_device newTextureWithDescriptor:textureDescriptor];
 
     // Create a texture that contains a random integer value for each pixel. The sample
     // uses these values to decorrelate pixels while drawing pseudorandom numbers from the
@@ -592,17 +1077,55 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
 
     uniforms->width = (unsigned int)_size.width;
     uniforms->height = (unsigned int)_size.height;
-
-    uniforms->frameIndex = _frameIndex++;
-
     uniforms->lightCount = (unsigned int)_scene.lightCount;
+    uniforms->temporalDenoiserEnabled = _metalFXEnabled ? 1 : 0;
+    uniforms->materialRoughness = _roughness;
+    uniforms->materialSpecular = _specularAlbedo;
+    uniforms->samplesPerPixel = (unsigned int)_samplesPerPixel;
+
+    unsigned int frameNumber = (unsigned int)_frameIndex;
+
+    // Zero out jitter when in debug render modes so the G-Buffer view is stable.
+    if (_renderMode == RendererRenderModeDefault && _metalFXEnabled) {
+        uniforms->jitter = vector2(haltonJitter(frameNumber + 1, 2) - 0.5f,
+                                   haltonJitter(frameNumber + 1, 3) - 0.5f);
+    } else {
+        uniforms->jitter = vector2(0.0f, 0.0f);
+    }
+
+    float safeAspectRatio = MAX((float)_size.width / MAX((float)_size.height, 1.0f), 0.0001f);
+    matrix_float4x4 currentWorldToViewMatrix = worldToViewMatrix(position, target, up);
+    matrix_float4x4 currentViewToClipMatrix = viewToClipMatrix(safeAspectRatio);
+
+    uniforms->worldToViewMatrix = currentWorldToViewMatrix;
+    uniforms->viewToClipMatrix = currentViewToClipMatrix;
+    uniforms->previousWorldToViewMatrix = _previousWorldToViewMatrix;
+    uniforms->previousViewToClipMatrix = _previousViewToClipMatrix;
+    uniforms->frameIndex = frameNumber;
 
 #if !TARGET_OS_IPHONE
     [_uniformBuffer didModifyRange:NSMakeRange(_uniformBufferOffset, alignedUniformsSize)];
 #endif
 
+    _previousWorldToViewMatrix = currentWorldToViewMatrix;
+    _previousViewToClipMatrix = currentViewToClipMatrix;
+    _frameIndex++;
+
     // Advance to the next slot in the uniform buffer.
     _uniformBufferIndex = (_uniformBufferIndex + 1) % maxFramesInFlight;
+}
+
+- (void)drawTexture:(id<MTLTexture>)texture
+      withPipeline:(id<MTLRenderPipelineState>)pipelineState
+        inViewport:(MTLViewport)viewport
+        scissorRect:(MTLScissorRect)scissorRect
+      usingEncoder:(id<MTLRenderCommandEncoder>)renderEncoder
+{
+    [renderEncoder setViewport:viewport];
+    [renderEncoder setScissorRect:scissorRect];
+    [renderEncoder setRenderPipelineState:pipelineState];
+    [renderEncoder setFragmentTexture:texture atIndex:0];
+    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
 }
 
 - (void)drawInMTKView:(MTKView *)view {
@@ -630,6 +1153,77 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
     NSUInteger width = (NSUInteger)_size.width;
     NSUInteger height = (NSUInteger)_size.height;
 
+    // Debug views also need a fresh G-buffer even when MetalFX is disabled.
+    BOOL needsGBufferPass = _metalFXEnabled || _renderMode != RendererRenderModeDefault;
+    if (needsGBufferPass) {
+        MTLRenderPassDescriptor *gBufferPass = [MTLRenderPassDescriptor renderPassDescriptor];
+        gBufferPass.colorAttachments[0].texture = _motionTexture;
+        gBufferPass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        gBufferPass.colorAttachments[0].clearColor = MTLClearColorMake(0.0f, 0.0f, 0.0f, 0.0f);
+        
+        gBufferPass.colorAttachments[1].texture = _diffuseAlbedoTexture;
+        gBufferPass.colorAttachments[1].loadAction = MTLLoadActionClear;
+        gBufferPass.colorAttachments[1].clearColor = MTLClearColorMake(0.0f, 0.0f, 0.0f, 0.0f);
+        
+        gBufferPass.colorAttachments[2].texture = _specularAlbedoTexture;
+        gBufferPass.colorAttachments[2].loadAction = MTLLoadActionClear;
+        gBufferPass.colorAttachments[2].clearColor = MTLClearColorMake(0.0f, 0.0f, 0.0f, 0.0f);
+
+        gBufferPass.colorAttachments[3].texture = _normalTexture;
+        gBufferPass.colorAttachments[3].loadAction = MTLLoadActionClear;
+        gBufferPass.colorAttachments[3].clearColor = MTLClearColorMake(0.0f, 0.0f, 1.0f, 1.0f);
+
+        gBufferPass.colorAttachments[4].texture = _roughnessTexture;
+        gBufferPass.colorAttachments[4].loadAction = MTLLoadActionClear;
+        gBufferPass.colorAttachments[4].clearColor = MTLClearColorMake(1.0f, 0.0f, 0.0f, 0.0f);
+
+        gBufferPass.depthAttachment.texture = _actualDepthTexture;
+        gBufferPass.depthAttachment.loadAction = MTLLoadActionClear;
+        gBufferPass.depthAttachment.clearDepth = 1.0f;
+        gBufferPass.depthAttachment.storeAction = MTLStoreActionStore;
+
+        id<MTLRenderCommandEncoder> gBufferEncoder = [commandBuffer renderCommandEncoderWithDescriptor:gBufferPass];
+        [gBufferEncoder setDepthStencilState:_gBufferDepthState];
+        [gBufferEncoder setCullMode:MTLCullModeNone];
+
+        for (NSUInteger i = 0; i < _scene.instances.count; i++) {
+            GeometryInstance *instance = _scene.instances[i];
+            matrix_float4x4 transform = instance.transform;
+            
+            if ([instance.geometry isKindOfClass:[TriangleGeometry class]]) {
+                TriangleGeometry *tg = (TriangleGeometry *)instance.geometry;
+                [gBufferEncoder setRenderPipelineState:_gBufferTrianglePipeline];
+                [gBufferEncoder setVertexBuffer:tg.vertexPositionBuffer offset:0 atIndex:0];
+                [gBufferEncoder setVertexBuffer:tg.vertexNormalBuffer offset:0 atIndex:1];
+                [gBufferEncoder setVertexBuffer:tg.vertexColorBuffer offset:0 atIndex:2];
+                [gBufferEncoder setVertexBytes:&transform length:sizeof(matrix_float4x4) atIndex:3];
+                [gBufferEncoder setVertexBuffer:_uniformBuffer offset:_uniformBufferOffset atIndex:4];
+
+                [gBufferEncoder setFragmentBuffer:_uniformBuffer offset:_uniformBufferOffset atIndex:0];
+                
+                [gBufferEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                           indexCount:tg.indexCount
+                                            indexType:MTLIndexTypeUInt16
+                                          indexBuffer:tg.indexBuffer
+                                    indexBufferOffset:0];
+            } else if ([instance.geometry isKindOfClass:[SphereGeometry class]]) {
+                SphereGeometry *sg = (SphereGeometry *)instance.geometry;
+                [gBufferEncoder setRenderPipelineState:_gBufferSpherePipeline];
+                [gBufferEncoder setVertexBuffer:sg.sphereBuffer offset:0 atIndex:0];
+                [gBufferEncoder setVertexBytes:&transform length:sizeof(matrix_float4x4) atIndex:1];
+                [gBufferEncoder setVertexBuffer:_uniformBuffer offset:_uniformBufferOffset atIndex:2];
+
+                [gBufferEncoder setFragmentBuffer:_uniformBuffer offset:_uniformBufferOffset atIndex:0];
+                
+                [gBufferEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                   vertexStart:0
+                                   vertexCount:36
+                                 instanceCount:sg.sphereCount];
+            }
+        }
+        [gBufferEncoder endEncoding];
+    }
+    
     // Launch a rectangular grid of threads on the GPU to perform ray tracing, with one thread per
     // pixel. The sample needs to align the number of threads to a multiple of the threadgroup
     // size, because earlier, when it created the pipeline objects, it declared that the pipeline
@@ -662,6 +1256,7 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
     [computeEncoder setTexture:_randomTexture atIndex:0];
     [computeEncoder setTexture:_accumulationTargets[0] atIndex:1];
     [computeEncoder setTexture:_accumulationTargets[1] atIndex:2];
+    [computeEncoder setTexture:_noisyColorTexture atIndex:3];
 
     // Mark any resources used by intersection functions as "used". The sample does this because
     // it only references these resources indirectly via the resource buffer. Metal makes all the
@@ -689,6 +1284,44 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
     // Swap the source and destination accumulation targets for the next frame.
     std::swap(_accumulationTargets[0], _accumulationTargets[1]);
 
+#if SUPPORTS_METALFX_FRAMEWORK
+    id<MTLTexture> displayTexture = _accumulationTargets[0];
+
+    if (_metalFXEnabled) {
+        if (@available(macOS 26.0, iOS 18.0, *)) {
+            _temporalDenoisedScaler.colorTexture = _noisyColorTexture;
+            _temporalDenoisedScaler.depthTexture = _metalFXUsesDepthTexture ? _actualDepthTexture : _disabledDepthTexture;
+            _temporalDenoisedScaler.motionTexture = _metalFXUsesMotionTexture ? _motionTexture : _disabledMotionTexture;
+            _temporalDenoisedScaler.diffuseAlbedoTexture = _diffuseAlbedoTexture;
+            _temporalDenoisedScaler.specularAlbedoTexture = _specularAlbedoTexture;
+            _temporalDenoisedScaler.normalTexture = _normalTexture;
+            _temporalDenoisedScaler.roughnessTexture = _roughnessTexture;
+            _temporalDenoisedScaler.outputTexture = _metalFXOutputTexture;
+            if (_metalFXAutoExposureEnabled) {
+                _temporalDenoisedScaler.exposureTexture = nil;
+                _temporalDenoisedScaler.preExposure = 1.0f;
+            } else {
+                _temporalDenoisedScaler.exposureTexture = _exposureTexture;
+                _temporalDenoisedScaler.preExposure = 1.0f;
+            }
+            Uniforms *currentUniforms = (Uniforms *)((char *)_uniformBuffer.contents + _uniformBufferOffset);
+            _temporalDenoisedScaler.jitterOffsetX = _metalFXUsesJitter ? currentUniforms->jitter.x : 0.0f;
+            _temporalDenoisedScaler.jitterOffsetY = _metalFXUsesJitter ? currentUniforms->jitter.y : 0.0f;
+            _temporalDenoisedScaler.motionVectorScaleX = _metalFXUsesMotionVectorScale ? (float)currentUniforms->width : 0.0f;
+            _temporalDenoisedScaler.motionVectorScaleY = _metalFXUsesMotionVectorScale ? (float)currentUniforms->height : 0.0f;
+            _temporalDenoisedScaler.worldToViewMatrix = _metalFXUsesWorldToViewMatrix ? currentUniforms->worldToViewMatrix : matrix_identity_float4x4;
+            _temporalDenoisedScaler.viewToClipMatrix = _metalFXUsesViewToClipMatrix ? currentUniforms->viewToClipMatrix : matrix_identity_float4x4;
+            _temporalDenoisedScaler.depthReversed = NO;
+            _temporalDenoisedScaler.shouldResetHistory = _needsResetHistory;
+            [_temporalDenoisedScaler encodeToCommandBuffer:commandBuffer];
+            displayTexture = _metalFXOutputTexture;
+            _needsResetHistory = false;
+        }
+    }
+#else
+    id<MTLTexture> displayTexture = _accumulationTargets[0];
+#endif
+
     if (view.currentDrawable) {
         // Copy the resulting image into the view using the graphics pipeline because the sample
         // can't write directly to it using the compute kernel. The sample delays getting the
@@ -704,12 +1337,106 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
         // Create a render command encoder.
         id <MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
 
-        [renderEncoder setRenderPipelineState:_copyPipeline];
+        id<MTLRenderPipelineState> displayPipeline = _copyPipeline;
+        id<MTLTexture> primaryDisplayTexture = displayTexture;
 
-        [renderEncoder setFragmentTexture:_accumulationTargets[0] atIndex:0];
+        if (_renderMode == RendererRenderModeForward) {
+            displayPipeline = _copyForwardPipeline;
+            primaryDisplayTexture = _diffuseAlbedoTexture;
+        } else if (_renderMode == RendererRenderModeDepth) {
+            displayPipeline = _copyDepthPipeline;
+            primaryDisplayTexture = _actualDepthTexture;
+        } else if (_renderMode == RendererRenderModeNormal) {
+            displayPipeline = _copyNormalPipeline;
+            primaryDisplayTexture = _normalTexture;
+        } else if (_renderMode == RendererRenderModeSpecular) {
+            displayPipeline = _copySpecularPipeline;
+            primaryDisplayTexture = _specularAlbedoTexture;
+        } else if (_renderMode == RendererRenderModeRoughness) {
+            displayPipeline = _copyRoughnessPipeline;
+            primaryDisplayTexture = _roughnessTexture;
+        } else if (_renderMode == RendererRenderModeMotion) {
+            displayPipeline = _copyMotionPipeline;
+            primaryDisplayTexture = _motionTexture;
+        }
 
-        // Draw a quad which fills the screen.
-        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
+        BOOL showsDenoiseComparison = (_renderMode == RendererRenderModeDefault &&
+                                      _denoiserMode == RendererDenoiserModeSplitScreen &&
+                                      _metalFXEnabled);
+        NSUInteger drawableWidth = view.currentDrawable.texture.width;
+        NSUInteger drawableHeight = view.currentDrawable.texture.height;
+
+        if (showsDenoiseComparison && drawableWidth > 1 && drawableHeight > 0) {
+            const NSUInteger dividerWidth = drawableWidth >= 8 ? 2 : 0;
+            NSUInteger comparisonWidth = drawableWidth - MIN(drawableWidth, dividerWidth);
+            NSUInteger leftWidth = comparisonWidth / 2;
+            NSUInteger rightWidth = comparisonWidth - leftWidth;
+
+            if (leftWidth > 0) {
+                MTLViewport leftViewport = {
+                    .originX = 0.0,
+                    .originY = 0.0,
+                    .width = (double)leftWidth,
+                    .height = (double)drawableHeight,
+                    .znear = 0.0,
+                    .zfar = 1.0
+                };
+                MTLScissorRect leftScissor = {
+                    .x = 0,
+                    .y = 0,
+                    .width = leftWidth,
+                    .height = drawableHeight
+                };
+                [self drawTexture:_accumulationTargets[0]
+                     withPipeline:_copyPipeline
+                       inViewport:leftViewport
+                       scissorRect:leftScissor
+                     usingEncoder:renderEncoder];
+            }
+
+            if (rightWidth > 0) {
+                NSUInteger rightOriginX = leftWidth + dividerWidth;
+                MTLViewport rightViewport = {
+                    .originX = (double)rightOriginX,
+                    .originY = 0.0,
+                    .width = (double)rightWidth,
+                    .height = (double)drawableHeight,
+                    .znear = 0.0,
+                    .zfar = 1.0
+                };
+                MTLScissorRect rightScissor = {
+                    .x = rightOriginX,
+                    .y = 0,
+                    .width = rightWidth,
+                    .height = drawableHeight
+                };
+                [self drawTexture:displayTexture
+                     withPipeline:_copyPipeline
+                       inViewport:rightViewport
+                       scissorRect:rightScissor
+                     usingEncoder:renderEncoder];
+            }
+        } else {
+            MTLViewport fullscreenViewport = {
+                .originX = 0.0,
+                .originY = 0.0,
+                .width = (double)drawableWidth,
+                .height = (double)drawableHeight,
+                .znear = 0.0,
+                .zfar = 1.0
+            };
+            MTLScissorRect fullscreenScissor = {
+                .x = 0,
+                .y = 0,
+                .width = drawableWidth,
+                .height = drawableHeight
+            };
+            [self drawTexture:primaryDisplayTexture
+                 withPipeline:displayPipeline
+                   inViewport:fullscreenViewport
+                   scissorRect:fullscreenScissor
+                 usingEncoder:renderEncoder];
+        }
 
         [renderEncoder endEncoding];
 

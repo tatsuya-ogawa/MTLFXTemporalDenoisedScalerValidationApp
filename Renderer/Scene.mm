@@ -60,10 +60,6 @@ float3 getTriangleNormal(float3 v0, float3 v1, float3 v2) {
 }
 
 @implementation TriangleGeometry {
-    id <MTLBuffer> _indexBuffer;
-    id <MTLBuffer> _vertexPositionBuffer;
-    id <MTLBuffer> _vertexNormalBuffer;
-    id <MTLBuffer> _vertexColorBuffer;
     id <MTLBuffer> _perPrimitiveDataBuffer;
 
     std::vector<uint16_t> _indices;
@@ -72,6 +68,16 @@ float3 getTriangleNormal(float3 v0, float3 v1, float3 v2) {
     std::vector<vector_float3> _colors;
     std::vector<Triangle> _triangles;
 };
+
+@synthesize indexBuffer = _indexBuffer;
+@synthesize vertexPositionBuffer = _vertexPositionBuffer;
+@synthesize vertexNormalBuffer = _vertexNormalBuffer;
+@synthesize vertexColorBuffer = _vertexColorBuffer;
+
+- (NSUInteger)indexCount {
+    return _indices.size();
+}
+
 
 - (void)uploadToBuffers {
     MTLResourceOptions options = getManagedBufferStorageMode();
@@ -245,12 +251,18 @@ float3 getTriangleNormal(float3 v0, float3 v1, float3 v2) {
 @end
 
 @implementation SphereGeometry {
-    id <MTLBuffer> _sphereBuffer;
     id <MTLBuffer> _boundingBoxBuffer;
     id <MTLBuffer> _perPrimitiveDataBuffer;
 
     std::vector<Sphere> _spheres;
 };
+
+@synthesize sphereBuffer = _sphereBuffer;
+
+- (NSUInteger)sphereCount {
+    return _spheres.size();
+}
+
 
 - (void)uploadToBuffers {
     MTLResourceOptions options = getManagedBufferStorageMode();
