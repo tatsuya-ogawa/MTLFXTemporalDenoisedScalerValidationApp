@@ -5,6 +5,7 @@ Abstract:
 The header for the renderer class that performs Metal setup and per-frame rendering.
 */
 
+#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
 
@@ -53,6 +54,9 @@ typedef NS_ENUM(NSUInteger, RendererRenderMode) {
 @property (nonatomic, assign) float roughness;
 @property (nonatomic, assign) float specularAlbedo;
 @property (nonatomic, assign) NSUInteger samplesPerPixel;
+@property (nonatomic, readonly) float averageFramesPerSecond;
+@property (nonatomic, readonly) float averageFrameTimeMS;
+@property (nonatomic, readonly, copy) NSString *statisticsText;
 
 - (void)setDenoiserMode:(RendererDenoiserMode)mode forView:(MTKView *)view;
 - (void)setHdrEnabled:(BOOL)enabled forView:(MTKView *)view;
