@@ -6,6 +6,7 @@ The implementation of the renderer class that performs Metal setup and per-frame
 */
 
 #import <simd/simd.h>
+#import <QuartzCore/QuartzCore.h>
 
 #if __has_include(<MetalFX/MetalFX.h>)
 #import <MetalFX/MetalFX.h>
@@ -26,6 +27,7 @@ static const size_t alignedUniformsSize = (sizeof(Uniforms) + 255) & ~255;
 static const float fieldOfViewRadians = 45.0f * (M_PI / 180.0f);
 static const float nearPlane = 0.05f;
 static const float farPlane = 20.0f;
+static const CFTimeInterval statisticsUpdateInterval = 0.25;
 
 static float haltonJitter(NSUInteger index, NSUInteger base)
 {
@@ -147,6 +149,11 @@ static matrix_float4x4 viewToClipMatrix(float aspectRatio)
     bool _useIntersectionFunctions;
     bool _usePerPrimitiveData;
     NSUInteger _samplesPerPixel;
+    CFTimeInterval _lastFrameTimestamp;
+    CFTimeInterval _statisticsSampleStart;
+    NSUInteger _framesSinceLastStatisticsSample;
+    float _averageFramesPerSecond;
+    float _averageFrameTimeMS;
 }
 
 - (void)updateExposureTexture
@@ -804,6 +811,55 @@ static matrix_float4x4 viewToClipMatrix(float aspectRatio)
     }
 }
 
+- (float)averageFramesPerSecond
+{
+    return _averageFramesPerSecond;
+}
+
+- (float)averageFrameTimeMS
+{
+    return _averageFrameTimeMS;
+}
+
+- (NSString *)statisticsText
+{
+    NSString *fpsText = _averageFramesPerSecond > 0.0f ? [NSString stringWithFormat:@"%.1f", _averageFramesPerSecond] : @"--";
+    NSString *frameTimeText = _averageFrameTimeMS > 0.0f ? [NSString stringWithFormat:@"%.2f", _averageFrameTimeMS] : @"--";
+    NSUInteger width = MAX((NSUInteger)_size.width, 0);
+    NSUInteger height = MAX((NSUInteger)_size.height, 0);
+
+    return [NSString stringWithFormat:@"FPS %@\nFrame %@ ms\nResolution %lux%lu\nSPP %lu  Accum %u",
+            fpsText,
+            frameTimeText,
+            (unsigned long)width,
+            (unsigned long)height,
+            (unsigned long)_samplesPerPixel,
+            _frameIndex];
+}
+
+- (void)updateStatistics
+{
+    CFTimeInterval now = CACurrentMediaTime();
+
+    if (_lastFrameTimestamp <= 0.0) {
+        _lastFrameTimestamp = now;
+        _statisticsSampleStart = now;
+        return;
+    }
+
+    _framesSinceLastStatisticsSample++;
+
+    CFTimeInterval elapsed = now - _statisticsSampleStart;
+    if (elapsed >= statisticsUpdateInterval) {
+        _averageFramesPerSecond = (float)_framesSinceLastStatisticsSample / (float)elapsed;
+        _averageFrameTimeMS = _averageFramesPerSecond > 0.0f ? (1000.0f / _averageFramesPerSecond) : 0.0f;
+        _statisticsSampleStart = now;
+        _framesSinceLastStatisticsSample = 0;
+    }
+
+    _lastFrameTimestamp = now;
+}
+
 - (void)configureMetalFXForSize:(CGSize)size
 {
 #if SUPPORTS_METALFX_FRAMEWORK
@@ -1129,6 +1185,8 @@ static matrix_float4x4 viewToClipMatrix(float aspectRatio)
 }
 
 - (void)drawInMTKView:(MTKView *)view {
+    [self updateStatistics];
+
     // The sample uses the uniform buffer to stream uniform data to the GPU, so it
     // needs to wait until the GPU finishes processing the oldest GPU frame before
     // it can reuse that space in the buffer.

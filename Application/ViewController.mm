@@ -59,11 +59,14 @@ The implementation of the cross-platform view controller.
     UIButton *_togglePanelButton;
     UILabel *_rawLabel;
     UILabel *_denoisedLabel;
+    UILabel *_statisticsLabel;
 #else
     NSButton *_togglePanelButton;
     NSTextField *_rawLabel;
     NSTextField *_denoisedLabel;
+    NSTextField *_statisticsLabel;
 #endif
+    NSTimer *_statisticsTimer;
 }
 
 - (void)viewDidLoad
@@ -114,7 +117,10 @@ The implementation of the cross-platform view controller.
     _view.delegate = _renderer;
 
     [self setupMetalFXControls];
+    [self setupStatisticsOverlay];
+    [self startStatisticsUpdates];
     [self updateMetalFXControls];
+    [self updateStatisticsLabel];
 }
 
 - (void)setupMetalFXControls
@@ -452,6 +458,67 @@ The implementation of the cross-platform view controller.
     ]];
 
     [NSLayoutConstraint activateConstraints:constraints];
+}
+
+- (void)setupStatisticsOverlay
+{
+#if TARGET_OS_IPHONE
+    _statisticsLabel = [[UILabel alloc] init];
+    _statisticsLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _statisticsLabel.textColor = UIColor.whiteColor;
+    _statisticsLabel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55f];
+    _statisticsLabel.font = [UIFont monospacedDigitSystemFontOfSize:12.0f weight:UIFontWeightMedium];
+    _statisticsLabel.numberOfLines = 0;
+    _statisticsLabel.layer.cornerRadius = 10.0f;
+    _statisticsLabel.layer.masksToBounds = YES;
+    _statisticsLabel.textAlignment = NSTextAlignmentLeft;
+    _statisticsLabel.text = @"FPS --\nFrame -- ms\nResolution --\nSPP --";
+    [_view addSubview:_statisticsLabel];
+#else
+    _statisticsLabel = [NSTextField labelWithString:@"FPS --\nFrame -- ms\nResolution --\nSPP --"];
+    _statisticsLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _statisticsLabel.textColor = NSColor.whiteColor;
+    _statisticsLabel.font = [NSFont monospacedDigitSystemFontOfSize:12.0f weight:NSFontWeightMedium];
+    _statisticsLabel.alignment = NSTextAlignmentLeft;
+    _statisticsLabel.maximumNumberOfLines = 0;
+    _statisticsLabel.wantsLayer = YES;
+    _statisticsLabel.layer.backgroundColor = [[NSColor colorWithWhite:0.0f alpha:0.55f] CGColor];
+    _statisticsLabel.layer.cornerRadius = 10.0f;
+    _statisticsLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    [_view addSubview:_statisticsLabel];
+#endif
+
+    [NSLayoutConstraint activateConstraints:@[
+        [_statisticsLabel.topAnchor constraintEqualToAnchor:_view.safeAreaLayoutGuide.topAnchor constant:16.0],
+        [_statisticsLabel.trailingAnchor constraintEqualToAnchor:_view.safeAreaLayoutGuide.trailingAnchor constant:-16.0],
+        [_statisticsLabel.widthAnchor constraintGreaterThanOrEqualToConstant:170.0],
+    ]];
+}
+
+- (void)startStatisticsUpdates
+{
+    [_statisticsTimer invalidate];
+    _statisticsTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
+                                                        target:self
+                                                      selector:@selector(updateStatisticsLabel)
+                                                      userInfo:nil
+                                                       repeats:YES];
+}
+
+- (void)updateStatisticsLabel
+{
+    NSString *statisticsText = _renderer.statisticsText;
+
+#if TARGET_OS_IPHONE
+    _statisticsLabel.text = statisticsText;
+#else
+    _statisticsLabel.stringValue = statisticsText;
+#endif
+}
+
+- (void)dealloc
+{
+    [_statisticsTimer invalidate];
 }
 
 - (void)updateMetalFXControls
